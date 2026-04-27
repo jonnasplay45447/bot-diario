@@ -20,7 +20,6 @@ const client = new Client({
 // ===== CONFIG =====
 const cargoAdmin = "943302582816890973";
 const cargoFila = "943302704275550208";
-const cargoPago = "1489100736225870015";
 
 const canalPagamento = "1489094389698527334";
 
@@ -61,34 +60,71 @@ client.on('messageCreate', async (msg) => {
     painel = await msg.channel.send({ embeds:[embed], components:[row] });
   }
 
+  // ===== REMOVER =====
+  if (msg.content.startsWith('!remover')) {
+    const user = msg.mentions.users.first();
+    if (!user) return msg.reply('Mencione alguém.');
+
+    if (fila.includes(user.id)) {
+      fila = fila.filter(id => id !== user.id);
+
+      const membro = await msg.guild.members.fetch(user.id).catch(()=>null);
+      if (membro && !membro.roles.cache.has(cargoAdmin)) {
+        await membro.roles.remove(cargoFila).catch(()=>{});
+      }
+
+      salvar();
+      atualizarPainel();
+
+      msg.channel.send(`❌ ${user} removido da fila.`);
+    } else {
+      msg.reply('Esse usuário não está na fila principal.');
+    }
+  }
+
+  // ===== RESERVA → FILA =====
+  if (msg.content === '!reserva') {
+
+    let adicionados = [];
+
+    while (fila.length < 10 && filaReserva.length > 0) {
+      const userId = filaReserva.shift();
+      fila.push(userId);
+
+      const membro = await msg.guild.members.fetch(userId).catch(()=>null);
+      if (membro) await membro.roles.add(cargoFila).catch(()=>{});
+
+      adicionados.push(`<@${userId}>`);
+    }
+
+    salvar();
+    atualizarPainel();
+
+    msg.channel.send(
+      `🔄 Reserva puxada!\n\n` +
+      `${adicionados.join('\n') || 'Ninguém entrou.'}`
+    );
+  }
+
   // ===== FINALIZAR =====
   if (msg.content === '!finalizar') {
     msg.delete().catch(()=>{});
 
-    try {
-      for (const userId of [...fila, ...filaReserva]) {
-        const membro = await msg.guild.members.fetch(userId).catch(()=>null);
-        if (membro) await membro.roles.remove(cargoFila).catch(()=>{});
-      }
-
-      fila = [];
-      filaReserva = [];
-      salvar();
-
-      if (painel) {
-        await painel.delete().catch(()=>{});
-        painel = null;
-      }
-
-      msg.channel.send(
-        "🏁 Partida finalizada!\n\n" +
-        "⚡ Quem não conseguiu entrar fica ligado, pois novas partidas serão anunciadas em breve.\n" +
-        "🎮 Continue acompanhando o JJ Diários para não perder as próximas!"
-      );
-
-    } catch (err) {
-      console.log(err);
+    for (const userId of [...fila, ...filaReserva]) {
+      const membro = await msg.guild.members.fetch(userId).catch(()=>null);
+      if (membro) await membro.roles.remove(cargoFila).catch(()=>{});
     }
+
+    fila = [];
+    filaReserva = [];
+    salvar();
+
+    if (painel) {
+      await painel.delete().catch(()=>{});
+      painel = null;
+    }
+
+    msg.channel.send("🏁 Partida finalizada!");
   }
 });
 
@@ -116,12 +152,9 @@ client.on('interactionCreate', async (i) => {
       }
 
       salvar();
-
       atualizarPainel();
 
-      // SALA CHEIA
       if (fila.length === 10) iniciarCiclo(i);
-
     }
 
     // ===== SAIR =====
@@ -157,7 +190,7 @@ async function atualizarPainel() {
   }).catch(()=>{});
 }
 
-// ===== CICLO DE PAGAMENTO =====
+// ===== CICLO =====
 async function iniciarCiclo(i) {
 
   await i.channel.send(
@@ -167,53 +200,13 @@ async function iniciarCiclo(i) {
   );
 
   setTimeout(async () => {
-    try {
 
-      let removidos = [];
-      let adicionados = [];
+    await i.channel.send(
+      `⏱️ Tempo esgotado!\n\n` +
+      `❌ Quem não pagou será removido pelo <@&${cargoAdmin}>\n\n` +
+      `🔄 Fila reserva irá entrar no lugar`
+    );
 
-      // VERIFICAR PAGAMENTO (CORRIGIDO)
-      for (const userId of [...fila]) {
-
-        const membro = await i.guild.members.fetch(userId, { force: true }).catch(()=>null);
-        if (!membro) continue;
-
-        if (!membro.roles.cache.has(cargoPago)) {
-          await membro.roles.remove(cargoFila).catch(()=>{});
-          fila = fila.filter(id => id !== userId);
-          removidos.push(`<@${userId}>`);
-        }
-      }
-
-      // PUXAR RESERVA
-      while (fila.length < 10 && filaReserva.length > 0) {
-
-        const novo = filaReserva.shift();
-        fila.push(novo);
-
-        const membro = await i.guild.members.fetch(novo).catch(()=>null);
-        if (membro) await membro.roles.add(cargoFila).catch(()=>{});
-
-        adicionados.push(`<@${novo}>`);
-      }
-
-      salvar();
-      atualizarPainel();
-
-      await i.channel.send(
-        `⏱️ Tempo encerrado!\n\n` +
-        `❌ Removidos:\n${removidos.join('\n') || 'Ninguém'}\n\n` +
-        `✅ Entraram da reserva:\n${adicionados.join('\n') || 'Ninguém'}`
-      );
-
-      // CICLO CONTÍNUO
-      if (fila.length === 10) {
-        iniciarCiclo(i);
-      }
-
-    } catch (err) {
-      console.log("Erro timer:", err);
-    }
   }, 10 * 60 * 1000);
 }
 
@@ -221,3 +214,8 @@ process.on('uncaughtException', console.error);
 process.on('unhandledRejection', console.error);
 
 client.login(process.env.TOKEN);
+
+// ===== KEEP ALIVE (Render) =====
+require('http')
+  .createServer((req, res) => res.end('OK'))
+  .listen(3000);
